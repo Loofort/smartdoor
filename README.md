@@ -1,2 +1,2 @@
 # smartdoor
-play with face recognition
+play with face real-time recognition
