@@ -37,6 +37,8 @@ Result NewTracker(void* pcadre, void* prect);
 Result UpdateTracker(void* ptracker, void* pcadre);
 void DestroyTracker(void* res);
 
+Result Recognize (void* pcadre[], void* prect[], int len );
+
 #ifdef __cplusplus
 }
 #endif

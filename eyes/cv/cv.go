@@ -238,26 +238,23 @@ func UpdateTracker(tracker Tracker, cadre Cadre) (Rect, error) {
 	return rect, nil
 }
 
-/**************** Shape of Face******************************/
-
-type Shape struct {
-}
-
-func GetShape(cadre Cadre, rect Rect) Shape {
-
-	return Shape{}
-}
-
-func ChooseBest(shp Shape, shape Shape) Shape {
-	return Shape{}
-}
+/**************** Person ******************************/
 
 type Person struct{}
 
-func Recognize(cadre Cadre, rect Rect) (Person, bool) {
-	return Person{}, true
-}
-
 func RecognizeBest(cadres []Cadre, rects []Rect) (Person, int) {
+	ln := len(cadres)
+	ccadres := make([]unsafe.Pointer, ln)
+	for i, cadre := range cadres {
+		ccadres[i] = cadre.cadre.p
+	}
+
+	crects := make([]unsafe.Pointer, ln)
+	for i, rect := range rects {
+		crects[i] = rect.rect.p
+	}
+
+	C.Recognize(&ccadres[0], &crects[0], C.int(ln))
+
 	return Person{}, -1
 }

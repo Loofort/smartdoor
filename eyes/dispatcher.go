@@ -23,7 +23,7 @@ func RunDispather(rectsMapc chan map[int]cv.Rect, cadreidc chan int, rframec cha
 
 	num := runtime.NumCPU()
 	for i := 0; i < num; i++ {
-		go shapeWorker(taskc, personSIDc, personc)
+		go recognizeWorker(taskc, personSIDc, personc)
 	}
 
 	return personc
@@ -128,7 +128,7 @@ func dispatcher(rectsMapc chan map[int]cv.Rect, cadreidc chan int, rframec chan 
 	}
 }
 
-func shapeWorker(rframesc chan []RFrame, personSIDc chan PersonSID, rframePersonc chan RFramePerson) {
+func recognizeWorker(rframesc chan []RFrame, personSIDc chan PersonSID, rframePersonc chan RFramePerson) {
 	/*
 		for rframe := range rframec {
 			shape := cv.GetShape(rframe.Cadre, rframe.Rect)
