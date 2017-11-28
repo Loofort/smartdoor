@@ -1,67 +1,79 @@
 package eyes
 
 import (
-	"smartdoor/eyes/cv"
-
+	"log"
 	"sort"
-	"sync"
-	"time"
+
+	"github.com/Loofort/smartdoor/eyes/cv"
 )
-type TrackerRect {
+
+type TrackerRect struct {
 	Tracker cv.Tracker
-	Rect cv.Rect
+	Rect    cv.Rect
 }
 type CadreFunc func() (cv.Cadre, chan []TrackerRect)
 
-func detector(cadrec chan cv.Cadre) {
-	period := 500 * time.Millisecond
-	timer := time.NewTimer(period)
-
+func Detector(cadrec chan cv.Cadre, detectSig chan struct{}, cadreFuncc chan CadreFunc) {
 	for cadre := range cadrec {
+		span := cadre.NewSpan("in_detector")
+
 		select {
-		case <-timer.C:
-			reset(timer, period)
-			cadreFuncc <- detectedCadre(cadre)
-		case <-idlec:
-			reset(timer, period)
+		case <-detectSig:
 			cadreFuncc <- detectedCadre(cadre)
 		default:
 			c := cadre
-			cadreFuncc <- func() (Cadre, chan []TrackerRect) { return c, nil }
+			cadreFuncc <- func() (cv.Cadre, chan []TrackerRect) { return c, nil }
 		}
+		span.Finish()
 	}
 }
 
 func detectedCadre(cadre cv.Cadre) CadreFunc {
 	trackersc := make(chan []TrackerRect)
 	go func() {
-		rects := cv.Detect(cadre)
-		trackers := newTrackers(cadre, rects)
-		trackersc <- TrackerRect
+		span := cadre.NewSpan("in_detector_cadre")
+		span.SetTag("component", "detector")
+		defer span.Finish()
+
+		rects, err := cv.Detect(cadre)
+		if err != nil {
+			// todo: log error
+			log.Printf("something worng with c detecor: %v", err)
+			trackersc <- nil
+			return
+		}
+
+		trackers, err := newTrackers(cadre, rects)
+		if err != nil {
+			// todo: log error
+			log.Printf("something worng with c tracker: %v", err)
+			trackersc <- nil
+			return
+		}
+
+		trackersc <- trackers
 	}()
 
-	cadreFunc = func() (cv.Cadre, chan []TrackerRect) { return cadre, trackersc }
+	cadreFunc := func() (cv.Cadre, chan []TrackerRect) { return cadre, trackersc }
 	return cadreFunc
 }
 
-func newTrackers(cadre cv.Cadre, rects []cv.Rects) []TrackerRect {
+func newTrackers(cadre cv.Cadre, rects []cv.Rect) ([]TrackerRect, error) {
 	trackers := make([]TrackerRect, 0, len(rects))
 
-	// create trackers in parallel
-	var mtx sync.Mutex
+	// todo: possible improvement:
+	// create trackers in parallel (if needed)
 	for _, rect := range rects {
-		go func() {
-			tracker := cv.CreateTracker(cadre, rect)
-			mtx.Lock()
-			trackers := append(trackers, TrackerRect{tracker,rect} )
-			mtx.Unlock()
-		}()
+		tracker, err := cv.CreateTracker(cadre, rect)
+		if err != nil {
+			return nil, err
+		}
+		trackers = append(trackers, TrackerRect{tracker, rect})
 	}
 
 	//sort trackers
 	sort.Sort(BySquare(trackers))
-
-	return trackers
+	return trackers, nil
 }
 
 type BySquare []TrackerRect

@@ -1,60 +1,74 @@
 package eyes
 
 import (
-	"sync"
+	"github.com/Loofort/smartdoor/eyes/cv"
 )
 
 type Frame struct {
 	cv.Cadre
-	Rank  int
-	SID int
+	Rank int
+	SID  int
 }
 
-var sss map[int]*Session
-var mmm sync.RWMutex
+type Session struct {
+	ID      int
+	Tracker cv.Tracker
+	Try     int
+}
 
-func synchronizer(CadreFuncc chan CadreFunc, framec chan Frame, trackersMapc chan map[int]Tracker, cadreidc chan int) {
-	var sessions []*Session
+var sid = 0
 
-	for cf := range CadreFuncc  {
+func newSession(tracker cv.Tracker) Session {
+	sid++
+	return Session{sid, tracker, 0}
+}
+
+func Synchronizer(CadreFuncc chan CadreFunc, framec chan Frame, trackersMapc chan map[int]cv.Tracker, rectsMapc chan map[int]cv.Rect, cadreidc chan int, rframesMapc chan map[int]RFrame) {
+	var sessions []Session
+
+	for cf := range CadreFuncc {
 		cadre, trackers := callCadreFunc(cf, cadreidc)
-		
+		span := cadre.NewSpan("synchronizer")
+
 		// transmit cadre to each session
 		for i, session := range sessions {
-			framec <- Frame{cadre, i, session.id}
+			framec <- Frame{cadre, i, session.ID}
 		}
-		
+		span.Finish()
+
 		if len(trackers) == 0 {
 			continue
 		}
+
+		span = cadre.NewSpan("synchronizer_do")
 
 		rects := getSessionRects(sessions, rectsMapc)
 		sessions = synchronize(sessions, rects, trackers)
 
 		// create rectMap and push to to dispather
-		rframesMap = make(map[int]RFrame, len(sessions))
-		for session = range sessions {
+		rframesMap := make(map[int]RFrame, len(sessions))
+		for _, session := range sessions {
 			rframesMap[session.ID] = RFrame{}
 		}
 		rframesMapc <- rframesMap
 
-
 		// create trackersMap and push to tracker
-		trackersMap = make(map[int]Tracker, len(sessions))
-		for session = range sessions {
+		trackersMap := make(map[int]cv.Tracker, len(sessions))
+		for _, session := range sessions {
 			trackersMap[session.ID] = session.Tracker
 		}
 		trackersMapc <- trackersMap
 
-		
 		// todo: release cadres` C resources
 		// clear track and recognize task queues
 		// wait for all worker complete
 		// call C destructors
+
+		span.Finish()
 	}
 }
 
-func callCadreFunc(cadreFunc CadreFuncc, cadreidc chan int) (cv.Cadre, []TrackerRect) {
+func callCadreFunc(cadreFunc CadreFunc, cadreidc chan int) (cv.Cadre, []TrackerRect) {
 	cadre, trackersc := cadreFunc()
 	if trackersc == nil {
 		return cadre, nil
@@ -73,29 +87,29 @@ func callCadreFunc(cadreFunc CadreFuncc, cadreidc chan int) (cv.Cadre, []Tracker
 // create new session
 // left without changes chance session
 // remove old session
-func synchronize(sessions []Session, rects []cv.Rect, trackers []Trackers) []Session {
+func synchronize(sessions []Session, rects []cv.Rect, trackers []TrackerRect) []Session {
 	// for each new tracker:
-	// - found existing session 
+	// - found existing session
 	// - or create new one
-	newSessions := make([]int, 0, len(trackers))
-	found := map[int]struct{}
-	for i, tracker := range trackers {
-		
+	newSessions := make([]Session, 0, len(trackers))
+	found := map[int]struct{}{}
+	for _, tracker := range trackers {
+
+		var session Session
 		ndx, ok := searchRect(rects, tracker.Rect)
 		if !ok {
-			session = newSession(tracker)
+			session = newSession(tracker.Tracker)
 		} else {
 			found[ndx] = struct{}{}
 			session = sessions[ndx]
 
 			// provision existing session
 			session.Try = 0
-			session.Tracker = tracker
+			session.Tracker = tracker.Tracker
 		}
 		newSessions = append(newSessions, session)
 	}
-	
-		
+
 	// for each exiting session:
 	for i, session := range sessions {
 		// - do nothing if it was matched with new tracker
@@ -114,12 +128,12 @@ func synchronize(sessions []Session, rects []cv.Rect, trackers []Trackers) []Ses
 	return newSessions
 }
 
-// obtain rects from all sessions, 
+// obtain rects from all sessions,
 // the rects array has sessions` order
-func getSessionRects(sessions []Session, cadreid int, rectsMapc chan map[int]cv.Rect) []Rect {
+func getSessionRects(sessions []Session, rectsMapc chan map[int]cv.Rect) []cv.Rect {
 	rectsMap := <-rectsMapc
-	rects := make([]Rect, 0, len(sessions))
-	for _, session = range sessions {
+	rects := make([]cv.Rect, 0, len(sessions))
+	for _, session := range sessions {
 		rect := rectsMap[session.ID]
 		rects = append(rects, rect)
 	}
@@ -127,12 +141,11 @@ func getSessionRects(sessions []Session, cadreid int, rectsMapc chan map[int]cv.
 	return rects
 }
 
-func searchRect(rects []Rect, target Rect) (int, bool) {
+func searchRect(rects []cv.Rect, target cv.Rect) (int, bool) {
 	for i, rect := range rects {
-		if !rect.Nil() && overlap(rect, target) {
-			return i , true
+		if !rect.Nil() && rect.Overlap(target) {
+			return i, true
 		}
 	}
 	return 0, false
 }
-

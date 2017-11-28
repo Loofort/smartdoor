@@ -1,38 +1,60 @@
 package eyes
 
-type personSID struct {
-	Person Person
+import (
+	"runtime"
+
+	"github.com/Loofort/smartdoor/eyes/cv"
+)
+
+type PersonSID struct {
+	Person cv.Person
 	SID    int
 }
 type RFramePerson struct {
 	RFrame
-	Person Person
+	Person cv.Person
 }
 
-func runDispather() {
+func RunDispather(rectsMapc chan map[int]cv.Rect, cadreidc chan int, rframec chan RFrame, rframesMapc chan map[int]RFrame, idle chan struct{}) chan RFramePerson {
+	taskc := make(chan []RFrame)
+	personSIDc := make(chan PersonSID)
+	personc := make(chan RFramePerson)
+	go dispatcher(rectsMapc, cadreidc, rframec, rframesMapc, personSIDc, personc, taskc, idle)
 
+	num := runtime.NumCPU()
+	for i := 0; i < num; i++ {
+		go shapeWorker(taskc, personSIDc, personc)
+	}
+
+	return personc
 }
 
-func dispatcher() {
-	var taskc1 chan RFrame
-	var task RFrame
+func dispatcher(rectsMapc chan map[int]cv.Rect, cadreidc chan int, rframec chan RFrame, rframesMapc chan map[int]RFrame, personSIDc chan PersonSID, personc chan RFramePerson, taskc chan []RFrame, idle chan struct{}) {
+	var taskc1 chan []RFrame
+	var task []RFrame
 	var isTask bool
 	var personTask RFramePerson
-	var frames RFrames
+	var rframes RFrames
 	var rframesMap map[int]RFrame // recent frames
 	var cadreid int
 	var wait map[int]struct{}
 	var waitCnt int
+	var idle1 chan struct{}
+	var personc1 chan RFramePerson
+	var personMap map[int]cv.Person
 
 	for {
 		if taskc1 == nil && personc1 == nil {
 			if task, isTask = rframes.Pop(rframesMap); isTask {
-				if person, isPerson := personMap[task.SID]; isPerson {
+				tframe := task[len(task)-1]
+				if person, isPerson := personMap[tframe.SID]; isPerson {
 					personc1 = personc
-					personTask = RFramePerson{task, person}
+					personTask = RFramePerson{tframe, person}
 				} else {
 					taskc1 = taskc
 				}
+			} else {
+				idle1 = idle
 			}
 		}
 
@@ -41,7 +63,7 @@ func dispatcher() {
 		case personSID := <-personSIDc:
 			personMap[personSID.SID] = personSID.Person
 		case rframesMap = <-rframesMapc:
-			newPersonMap := make(map[int]Person, len(rframesMap))
+			newPersonMap := make(map[int]cv.Person, len(rframesMap))
 			for sid := range rframesMap {
 				if pers, ok := personMap[sid]; ok {
 					newPersonMap[sid] = pers
@@ -50,7 +72,7 @@ func dispatcher() {
 			}
 		case cadreid = <-cadreidc:
 			// we could synchronize here,
-			// at this point we're garantied that sync frame hasn't reached dispather yet.
+			// at this point we're guarantied that sync frame hasn't reached dispather yet.
 			//
 			// any session that has recent cadre id less than cadreid - 1 should be market as outdated.
 
@@ -80,13 +102,13 @@ func dispatcher() {
 				break
 			}
 			if _, ok := wait[sid]; ok {
-				counter++
+				waitCnt++
 			}
-			if counter == len(wait) {
+			if waitCnt == len(wait) {
 				wait = nil
 
 				//push rects
-				rectsMap := make(map[int]Rect, len(rframesMap))
+				rectsMap := make(map[int]cv.Rect, len(rframesMap))
 				for sid, rframe := range rframesMap {
 					rect := rframe.Rect
 					if rframe.ID != cadreid {
@@ -99,23 +121,49 @@ func dispatcher() {
 
 		case taskc1 <- task:
 			taskc1 = nil
-		case rframePersonc1 <- personTask:
+		case personc1 <- personTask:
 			personc1 = nil
+		case idle1 <- struct{}{}:
 		}
 	}
 }
 
-func shapeWorker() {
-	for rframe := range rframec {
-		shape := cv.Shape(rframe.Cadre, rframe.Rect)
-		shapec <- shape
+func shapeWorker(rframesc chan []RFrame, personSIDc chan PersonSID, rframePersonc chan RFramePerson) {
+	/*
+		for rframe := range rframec {
+			shape := cv.GetShape(rframe.Cadre, rframe.Rect)
+			shapec <- Face{rframe, shape}
+		}
+	*/
+
+	for rframes := range rframesc {
+		if len(rframes) == 0 {
+			continue
+		}
+
+		cadres := make([]cv.Cadre, len(rframes))
+		rects := make([]cv.Rect, len(rframes))
+		for i, rframe := range rframes {
+			cadres[i] = rframe.Frame.Cadre
+			rects[i] = rframe.Rect
+		}
+
+		person, i := cv.RecognizeBest(cadres, rects)
+		if i != -1 {
+			personSIDc <- PersonSID{person, rframes[i].SID}
+			rframePersonc <- RFramePerson{rframes[i], person}
+		}
 	}
+
 }
 
 // I don't expect the length will be greater then 10,
 // otherwise need to replase it with heap type
 type RFrames [][]RFrame
 
+// todo:
+// it has no sense to keep very old frames -
+// limit the depth to 10
 func (rframes RFrames) Push(rframe RFrame) {
 	// check the length of queue, if it less than required rank - extend it
 	ln := rframe.Rank - len(rframes) + 1
@@ -126,31 +174,42 @@ func (rframes RFrames) Push(rframe RFrame) {
 	rframes[rframe.Rank] = append(rframes[rframe.Rank], rframe)
 }
 
-func (rframes RFrames) Pop(cidMap map[int]RFrame) (RFrame, bool) {
+func (rframes RFrames) Pop(cidMap map[int]RFrame) ([]RFrame, bool) {
 	for i, frms := range rframes {
 		if len(frms) == 0 {
 			continue
 		}
 
 		// pop frame
-		j, rframe := getRFrame(frms, cidMap)
-		if j == -1 {
-			rframes[i] = nil
+		start, end := getRFrame(frms, cidMap)
+		if start == end {
+			rframes[i] = frms[:0]
 			continue
 		}
 
-		rframes[i] = frms[j+1:]
-		return rframe, true
+		rframes[i] = frms[end:]
+		return frms[start:end], true
 	}
-	return RFrame{}, false
+	return nil, false
 }
 
-func getRFrame(rframes []RFrame, cidMap map[int]RFrame) (int, RFrame) {
-	for j, rframe = range rframes {
-		if _, ok := cidMap[rframe.SID]; ok {
-			return j, rframe
+func getRFrame(rframes []RFrame, cidMap map[int]RFrame) (int, int) {
+	var start, end int
+
+	for start < len(rframes) {
+		sid := rframes[start].SID
+		for end = start + 1; end < len(rframes); end++ {
+			if rframes[end].SID != sid {
+				break
+			}
 		}
+
+		if _, ok := cidMap[sid]; ok {
+			return start, end
+		}
+
+		start = end
 	}
 
-	return -1, RFrame{}
+	return 0, 0
 }
