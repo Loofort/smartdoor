@@ -47,8 +47,6 @@ func main() {
 	rframec := eyes.RunTracker(framec, trackersMapc, idleTracker)
 	personc := eyes.RunDispather(rectsMapc, cadreidc, rframec, rframesMapc, idleDispather)
 
-	//eyes.RunRecognizer(shapec, personSIDc, personc, idleRecognizer)
-
 	// read persons
 	for person := range personc {
 		fmt.Printf("get person %v \n", person)
