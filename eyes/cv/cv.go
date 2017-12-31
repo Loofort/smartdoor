@@ -2,19 +2,22 @@ package cv
 
 // #cgo CXXFLAGS: -std=c++11
 // #cgo LDFLAGS: -I/usr/local/include/opencv -I/usr/local/include -L/usr/local/lib -lopencv_dnn -lopencv_ml -lopencv_objdetect -lopencv_shape -lopencv_stitching -lopencv_superres -lopencv_videostab -lopencv_calib3d -lopencv_features2d -lopencv_highgui -lopencv_videoio -lopencv_imgcodecs -lopencv_video -lopencv_photo -lopencv_imgproc -lopencv_flann -lopencv_viz -lopencv_core
-// #cgo LDFLAGS: -I/usr/local/include -I/usr/include/libpng12 -L/usr/local/lib -ldlib -lpng12
+// #cgo LDFLAGS: -I/usr/local/include -I/usr/include/libpng12 -L/usr/local/lib -ldlib -lpng12 -L/usr/lib/x86_64-linux-gnu/ -lgif
 // #include "cv.h"
 // #include <stdlib.h>
 import "C"
 import (
 	"errors"
 	"fmt"
-	"log"
+	"io"
 	"runtime"
+	"sync"
 	"unsafe"
 
 	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
+	jaeger "github.com/uber/jaeger-client-go"
+	jaegercfg "github.com/uber/jaeger-client-go/config"
 )
 
 type cpointer struct {
@@ -60,21 +63,71 @@ func toGoArr(res C.struct_ResultArr) (unsafe.Pointer, int, error) {
 	return res.Res, int(res.Cnt), nil
 }
 
+var tracers = &sync.Map{}
+var Closers []io.Closer
+var cfg = jaegercfg.Configuration{
+	Sampler: &jaegercfg.SamplerConfig{
+		Type:  jaeger.SamplerTypeConst,
+		Param: 1,
+	},
+	Reporter: &jaegercfg.ReporterConfig{
+		LocalAgentHostPort: "127.0.0.1:6831",
+	},
+}
+
+func getTracer(name string) opentracing.Tracer {
+	value, ok := tracers.Load(name)
+	if ok {
+		return value.(opentracing.Tracer)
+	}
+
+	tracer, closer, err := cfg.New(name)
+	if err != nil {
+		// todo: check err
+	}
+	Closers = append(Closers, closer)
+
+	tracers.Store(name, tracer)
+
+	return tracer
+}
+
+type Span struct {
+	opentracing.Span
+}
+
+func (s *Span) SpawnSpan(name string) opentracing.Span {
+	tracer := getTracer(name)
+
+	var opts []opentracing.StartSpanOption
+	if s.Span != nil {
+		//opt := opentracing.FollowsFrom(s.Span.Context())
+		opts = append(opts, opentracing.ChildOf(s.Span.Context()))
+	}
+
+	span := tracer.StartSpan(name, opts...)
+	ext.SamplingPriority.Set(span, 1)
+	s.Span = span
+	return span
+}
+
+func (s *Span) CreateSpan(name string) *Span {
+	tracer := getTracer(name)
+	opt := opentracing.FollowsFrom(s.Span.Context())
+	span := tracer.StartSpan(name, opt)
+	ext.SamplingPriority.Set(span, 1)
+	return &Span{span}
+}
+
 /******************* CADRE ***************************/
 
 type Source struct {
 	capture *cpointer
 }
 type Cadre struct {
+	*Span
 	cadre *cpointer
 	ID    int
-	Span  opentracing.Span
-}
-
-func (c *Cadre) NewSpan(name string) opentracing.Span {
-	//c.Span = opentracing.GlobalTracer().StartSpan(name, opentracing.FollowsFrom(c.Span.Context()))
-	span := opentracing.GlobalTracer().StartSpan(name, opentracing.ChildOf(c.Span.Context()))
-	return span
 }
 
 var id int
@@ -103,13 +156,13 @@ func WaitForCadre(src Source) (Cadre, error) {
 	}
 
 	id++
-	span := opentracing.StartSpan("create_cadre")
-	ext.SamplingPriority.Set(span, 1)
+	s := &Span{}
+	span := s.SpawnSpan("cadre")
 	destroy := func(p unsafe.Pointer) {
 		span.Finish()
 		destroyCadre(p)
 	}
-	cadre := Cadre{newCPointer(ptr, destroy), id, span}
+	cadre := Cadre{s, newCPointer(ptr, destroy), id}
 	return cadre, nil
 }
 func destroyCadre(p unsafe.Pointer) {
@@ -118,6 +171,7 @@ func destroyCadre(p unsafe.Pointer) {
 
 /***************** Detect Rect ************************/
 type Rect struct {
+	//	*Span
 	rect   *cpointer
 	Left   int
 	Top    int
@@ -178,10 +232,14 @@ func Detect(cadre Cadre) ([]Rect, error) {
 	rects := make([]Rect, len(slice))
 	for i, crect := range slice {
 		//crect := (*C.struct_Rectangle)(v)
-		log.Printf("struct_Rectangle %#v \n", crect)
-
+		//span := cadre.CreateSpan("rect")
+		destroy := func(p unsafe.Pointer) {
+			//span.Finish()
+			destroyRect(p)
+		}
 		rects[i] = Rect{
-			rect:   newCPointer(unsafe.Pointer(crect.Rect), destroyRect),
+			//Span:   span,
+			rect:   newCPointer(unsafe.Pointer(crect.Rect), destroy),
 			Left:   int(crect.Left),
 			Top:    int(crect.Top),
 			Right:  int(crect.Right),
@@ -204,13 +262,19 @@ type Tracker struct {
 
 // correlation_tracker need img and rect
 func CreateTracker(cadre Cadre, rect Rect) (Tracker, error) {
+	span := cadre.CreateSpan("create_tracker")
+	defer span.Finish()
+
 	ptr, err := toGo(C.NewTracker(cadre.cadre.p, rect.rect.p))
 	if err != nil {
 		err = fmt.Errorf("can't create tracker: %v", err)
 		return Tracker{}, err
 	}
 
-	trk := Tracker{newCPointer(ptr, destroyTracker)}
+	destroy := func(p unsafe.Pointer) {
+		destroyTracker(p)
+	}
+	trk := Tracker{newCPointer(ptr, destroy)}
 	return trk, nil
 }
 
@@ -219,6 +283,9 @@ func destroyTracker(p unsafe.Pointer) {
 }
 
 func UpdateTracker(tracker Tracker, cadre Cadre) (Rect, error) {
+	span := cadre.CreateSpan("update_tracker")
+	defer span.Finish()
+
 	ptr, err := toGo(C.UpdateTracker(tracker.tracker.p, cadre.cadre.p))
 	if err != nil {
 		err = fmt.Errorf("can't update tracker: %v", err)
@@ -226,9 +293,13 @@ func UpdateTracker(tracker Tracker, cadre Cadre) (Rect, error) {
 	}
 	defer C.free(ptr)
 
+	destroy := func(p unsafe.Pointer) {
+		destroyRect(p)
+	}
 	crect := (*C.struct_Rectangle)(ptr)
 	rect := Rect{
-		rect:   newCPointer(crect.Rect, destroyRect),
+		//Span:   span,
+		rect:   newCPointer(crect.Rect, destroy),
 		Left:   int(crect.Left),
 		Top:    int(crect.Top),
 		Right:  int(crect.Right),
@@ -240,9 +311,12 @@ func UpdateTracker(tracker Tracker, cadre Cadre) (Rect, error) {
 
 /**************** Person ******************************/
 
-type Person struct{}
+type Person struct {
+	Name string
+}
 
-func RecognizeBest(cadres []Cadre, rects []Rect) (Person, int) {
+func RecognizeBest(cadres []Cadre, rects []Rect) (Person, error) {
+
 	ln := len(cadres)
 	ccadres := make([]unsafe.Pointer, ln)
 	for i, cadre := range cadres {
@@ -254,7 +328,38 @@ func RecognizeBest(cadres []Cadre, rects []Rect) (Person, int) {
 		crects[i] = rect.rect.p
 	}
 
-	C.Recognize(&ccadres[0], &crects[0], C.int(ln))
+	//fmt.Printf("DUMP %v\n", spew.Sdump(ccadres, crects))
+	//fmt.Printf("DEB %#v %#v\n", &ccadres[0], &crects[0])
+	ptr, err := toGo(C.Recognize(&ccadres[0], &crects[0], C.int(ln)))
+	// shouldn't free ptr;
+	str := C.GoString((*C.char)(ptr))
 
-	return Person{}, -1
+	return Person{str}, err
+}
+
+func InitPersons(folder, modelPath string) ([]string, error) {
+	cfolder := C.CString(folder)
+	defer C.free(unsafe.Pointer(cfolder))
+
+	cmodelPath := C.CString(modelPath)
+	defer C.free(unsafe.Pointer(cmodelPath))
+
+	ptr, cnt, err := toGoArr(C.InitPersons(cfolder, cmodelPath))
+	if err != nil {
+		err = fmt.Errorf("can't init persons: %v", err)
+		return nil, err
+	}
+	if cnt == 0 {
+		return nil, nil
+	}
+	defer C.free(ptr)
+
+	slice := (*[1 << 30](*C.char))(ptr)[:cnt:cnt] //  C type - *char
+
+	files := make([]string, len(slice)) // new Go slice with proper Go types - string
+	for i, cpath := range slice {
+		files[i] = C.GoString(cpath)
+	}
+
+	return files, nil
 }

@@ -141,20 +141,29 @@ func recognizeWorker(rframesc chan []RFrame, personSIDc chan PersonSID, rframePe
 			continue
 		}
 
-		cadres := make([]cv.Cadre, len(rframes))
-		rects := make([]cv.Rect, len(rframes))
-		for i, rframe := range rframes {
-			cadres[i] = rframe.Frame.Cadre
-			rects[i] = rframe.Rect
-		}
+		recognizeWork(rframes, personSIDc, rframePersonc)
+	}
+}
 
-		person, i := cv.RecognizeBest(cadres, rects)
-		if i != -1 {
-			personSIDc <- PersonSID{person, rframes[i].SID}
-			rframePersonc <- RFramePerson{rframes[i], person}
-		}
+func recognizeWork(rframes []RFrame, personSIDc chan PersonSID, rframePersonc chan RFramePerson) {
+	cadres := make([]cv.Cadre, len(rframes))
+	rects := make([]cv.Rect, len(rframes))
+	for i, rframe := range rframes {
+		cadres[i] = rframe.Frame.Cadre
+		rects[i] = rframe.Rect
+
+		s1 := cadres[i].SpawnSpan("recognize_by_cadre")
+		//s2 := rects[i].SpawnSpan("recognize_by_rect")
+		defer s1.Finish()
+		//defer s2.Finish()
 	}
 
+	person, err := cv.RecognizeBest(cadres, rects)
+	// todo: change condition
+	if err != nil && person.Name != "" {
+		personSIDc <- PersonSID{person, rframes[0].SID}
+		rframePersonc <- RFramePerson{rframes[len(rframes)-1], person}
+	}
 }
 
 // I don't expect the length will be greater then 10,
@@ -164,7 +173,8 @@ type RFrames [][]RFrame
 // todo:
 // it has no sense to keep very old frames -
 // limit the depth to 10
-func (rframes RFrames) Push(rframe RFrame) {
+func (rframesref *RFrames) Push(rframe RFrame) {
+	rframes := *rframesref
 	// check the length of queue, if it less than required rank - extend it
 	ln := rframe.Rank - len(rframes) + 1
 	if ln > 0 {
@@ -172,6 +182,8 @@ func (rframes RFrames) Push(rframe RFrame) {
 	}
 
 	rframes[rframe.Rank] = append(rframes[rframe.Rank], rframe)
+
+	*rframesref = rframes
 }
 
 func (rframes RFrames) Pop(cidMap map[int]RFrame) ([]RFrame, bool) {

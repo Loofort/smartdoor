@@ -1,15 +1,18 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"runtime"
 	"time"
 
 	"github.com/Loofort/smartdoor/eyes"
 	"github.com/Loofort/smartdoor/eyes/cv"
+
 	opentracing "github.com/opentracing/opentracing-go"
 	jaeger "github.com/uber/jaeger-client-go"
 	jaegercfg "github.com/uber/jaeger-client-go/config"
@@ -18,9 +21,22 @@ import (
 	"sourcegraph.com/sourcegraph/appdash/traceapp"
 )
 
+//"../../../smartdoor.bk/data/VIDEO/me/me.avi"
+var infile = flag.String("in", "../../../smartdoor.bk/data/ideal/boss/vide.avi", "file path to input video")
+
 func main() {
-	closer := openTracer()
-	defer closer.Close()
+	flag.Parse()
+	//closer := openTracer()
+	//defer closer.Close()
+
+	persons, err := cv.InitPersons(
+		"../../../smartdoor.bk/data/ideal/boss/train/",
+		"eyes/cv/cnn-models/shape_predictor_5_face_landmarks.dat",
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_ = persons
 
 	idleDispather := make(chan struct{})
 	idleTracker := make(chan struct{})
@@ -32,7 +48,7 @@ func main() {
 	cadreFuncc := make(chan eyes.CadreFunc)
 	go eyes.Detector(cadrec, detectSig, cadreFuncc)
 
-	err := ProduceCadre(cadrec)
+	err = ProduceCadre(cadrec, *infile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -42,32 +58,22 @@ func main() {
 	rectsMapc := make(chan map[int]cv.Rect)
 	cadreidc := make(chan int)
 	rframesMapc := make(chan map[int]eyes.RFrame)
-	go eyes.Synchronizer(cadreFuncc, framec, trackersMapc, rectsMapc, cadreidc, rframesMapc)
 
 	rframec := eyes.RunTracker(framec, trackersMapc, idleTracker)
+	go eyes.Synchronizer(cadreFuncc, framec, trackersMapc, rectsMapc, cadreidc, rframesMapc, rframec)
+
 	personc := eyes.RunDispather(rectsMapc, cadreidc, rframec, rframesMapc, idleDispather)
 
 	// read persons
 	for person := range personc {
+		span := person.Cadre.SpawnSpan("person")
 		fmt.Printf("get person %v \n", person)
+		span.Finish()
 	}
-
 }
 
-func idleMock() chan struct{} {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	idlec := make(chan struct{})
-	go func() {
-		for range ticker.C {
-			idlec <- struct{}{}
-		}
-	}()
-
-	return idlec
-}
-
-func ProduceCadre(cadrec chan cv.Cadre) error {
-	src, err := cv.NewCapture("/home/illia/work/go/src/smartdoor.bk/data/VIDEO/me/01.asf")
+func ProduceCadre(cadrec chan cv.Cadre, file string) error {
+	src, err := cv.NewCapture(file)
 	if err != nil {
 		return err
 	}
@@ -77,12 +83,17 @@ func ProduceCadre(cadrec chan cv.Cadre) error {
 		for {
 			cadre, err := cv.WaitForCadre(src)
 			if err != nil {
-				log.Printf("err: %v; shoutdown in 10 minutes\n", err)
-				//time.Sleep(10 * time.Minute)
+				runtime.GC()
+
+				log.Printf("err: %v; shoutdown in 1 sec\n", err)
+				time.Sleep(20 * time.Minute)
+				for _, closer := range cv.Closers {
+					closer.Close()
+				}
+
 				log.Fatal(err)
 			}
 			cnt++
-			fmt.Printf("#%d ", cnt)
 			if cnt > 20 {
 				//time.Sleep(40 * time.Minute)
 				time.Sleep(10 * time.Millisecond)
@@ -90,14 +101,11 @@ func ProduceCadre(cadrec chan cv.Cadre) error {
 				time.Sleep(10 * time.Millisecond)
 			}
 
-			span := cadre.NewSpan("wait_for_detector")
-
 			select {
 			case cadrec <- cadre:
 			default:
 			}
 
-			span.Finish()
 		}
 	}()
 	return nil
@@ -124,7 +132,7 @@ func openTracer() io.Closer {
 
 	// Initialize tracer with a logger and a metrics factory
 	closer, err := cfg.InitGlobalTracer(
-		"serviceName",
+		"CV",
 		//jaegercfg.Logger(jLogger),
 		//jaegercfg.Metrics(jMetricsFactory),
 		//jaegercfg.Observer(rpcmetrics.NewObserver(jMetricsFactory, rpcmetrics.DefaultNameNormalizer)),
@@ -134,9 +142,21 @@ func openTracer() io.Closer {
 		return nil
 	}
 
+	tracer, _, err := cfg.New("eye")
+	if err != nil {
+		log.Fatalf("Could not initialize jaeger tracer: %s", err.Error())
+		return nil
+	}
+	trc = tracer
+
 	return closer
 }
 
+var trc opentracing.Tracer
+
+func secondTracer() opentracing.Tracer {
+	return trc
+}
 func openTracerAppDash() {
 	memStore := appdash.NewMemoryStore()
 	store := &appdash.RecentStore{

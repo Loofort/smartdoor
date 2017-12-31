@@ -1,6 +1,7 @@
 package eyes
 
 import (
+	"fmt"
 	"log"
 	"sort"
 
@@ -15,10 +16,11 @@ type CadreFunc func() (cv.Cadre, chan []TrackerRect)
 
 func Detector(cadrec chan cv.Cadre, detectSig chan struct{}, cadreFuncc chan CadreFunc) {
 	for cadre := range cadrec {
-		span := cadre.NewSpan("in_detector")
+		span := cadre.SpawnSpan("sending_new_cadre")
 
 		select {
 		case <-detectSig:
+			fmt.Printf("trigger %d \n", cadre.ID)
 			cadreFuncc <- detectedCadre(cadre)
 		default:
 			c := cadre
@@ -31,8 +33,7 @@ func Detector(cadrec chan cv.Cadre, detectSig chan struct{}, cadreFuncc chan Cad
 func detectedCadre(cadre cv.Cadre) CadreFunc {
 	trackersc := make(chan []TrackerRect)
 	go func() {
-		span := cadre.NewSpan("in_detector_cadre")
-		span.SetTag("component", "detector")
+		span := cadre.SpawnSpan("detect_face_rects")
 		defer span.Finish()
 
 		rects, err := cv.Detect(cadre)

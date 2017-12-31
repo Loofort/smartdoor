@@ -1,9 +1,14 @@
 #include <iostream>
+#include <sys/types.h>
+#include <dirent.h>
+
 #include "opencv2/highgui.hpp"
-#include <dlib/image_processing/frontal_face_detector.h>
 #include <dlib/opencv.h>
+#include <dlib/image_processing/frontal_face_detector.h>
 #include <dlib/image_processing.h>
+#include <dlib/image_io.h>
 #include <dlib/dnn.h>
+#include <dlib/gui_widgets.h> // for debug
 #include "cv.h"
 #include "stdint.h"
 
@@ -149,7 +154,6 @@ Result UpdateTracker(void* ptracker, void* pcadre) {
 }
 
 /************************************ Person *******************************************/
-
 // ------------------------------- Define face identification cnn ---------------------------------------------------------
 template <template <int,template<typename>class,int,typename> class block, int N, template<typename>class BN, typename SUBNET>
 using residual = add_prev1<block<N,BN,1,tag1<SUBNET>>>;
@@ -181,13 +185,97 @@ using anet_type = loss_metric<fc_no_bias<128,avg_pool_everything<
 
 // ----------------------------------------------------------------------------------------
 
-shape_predictor init_sp() {
+/************************ Init face database ************************/
+shape_predictor init_sp(const char* modelpath) {
     shape_predictor shpr;
-    deserialize("eyes/cv/cnn-models/shape_predictor_5_face_landmarks.dat") >> shpr;
+ //   deserialize("eyes/cv/cnn-models/shape_predictor_5_face_landmarks.dat") >> shpr;
+    deserialize(modelpath) >> shpr;
     return shpr;
 }
-shape_predictor sp=init_sp();
+shape_predictor sp;
 anet_type net;
+
+std::vector<matrix<float,0,1>> descriptors;
+std::vector<char*> names;
+
+void addImage(char* file) {
+    array2d<rgb_pixel> img;
+    load_image(img, file);
+
+    std::vector<matrix<rgb_pixel>> faces;
+    for (auto face : detector(img)) {
+        auto shape = sp(img, face);
+
+        /*
+            image_window win;
+            win.set_image(img); 
+            win.clear_overlay(); 
+            win.add_overlay( shape.get_rect());
+            cin.get();
+        */
+
+        matrix<rgb_pixel> face_chip;
+        extract_image_chip(img, get_face_chip_details(shape,150,0.25), face_chip);
+        faces.push_back(move(face_chip));
+    }
+
+    if (faces.size() == 0) {
+        return;
+    }
+
+    std::vector<matrix<float,0,1>> face_descriptors = net(faces);
+    descriptors.push_back(face_descriptors[0]);
+    names.push_back(file);
+}
+
+ResultArr initImages(const char* folder) {
+    ResultArr result={0};
+
+    unsigned char isFile =0x8;
+    struct dirent *ent;
+    DIR* dir = opendir(folder);
+    if (dir == NULL) {
+        result.Err = strdup("Could not read person folder");
+        return result;
+    }
+
+    while ((ent = readdir (dir)) != NULL) {
+        if ( ent->d_type == isFile) {
+            char* file = (char*)malloc(strlen(folder)+ strlen(ent->d_name)+1);
+            if (file == NULL) {
+                result.Err = strdup("can't create person path: malloc failed");
+                return result; 
+            }
+
+            strcpy(file, folder);
+            strcat(file, ent->d_name);
+            addImage(file);
+
+            //todo: free ent ?
+        }
+    }
+
+    char** cnames = (char**)malloc(names.size() * sizeof(char*));
+    for (size_t i = 0; i < names.size(); ++i) {
+        cnames[i] = names[i];
+    }
+
+    result.Cnt = names.size();
+    result.Res = cnames;
+    return result;
+}
+
+ResultArr InitPersons(const char* folder, const char* modelpath ) {
+    ResultArr result={0};
+    try {
+        sp = init_sp(modelpath);
+        result = initImages(folder);
+    } catch (exception& e) {
+        result.Err = strdup(e.what());
+    }
+    return result;
+}
+
 
 Result GetShape(void* pcadre, void* prect) {
     Result result={0};
@@ -219,7 +307,6 @@ Result Recognize (void* pcadre[], void* prect[], int len ) {
             cv_image<bgr_pixel> frame = (*(Mat*)pcadre[i]);
             rectangle rect = *(rectangle*)(prect[i]);
             auto shape = sp(frame, rect);
-            
             if (shape.num_parts() < 5) 
                 continue;
             
@@ -231,20 +318,34 @@ Result Recognize (void* pcadre[], void* prect[], int len ) {
         }
 
         if (ok) {
-            matrix<rgb_pixel>* face_chip;
-            extract_image_chip(bestframe, get_face_chip_details(bestshape,150,0.25), *face_chip);
-            
+            /*
+            image_window win;
+            win.set_image(bestframe); 
+            win.clear_overlay(); 
+            win.add_overlay( bestshape.get_rect());
+            */
+
+            matrix<rgb_pixel> face_chip;
+            extract_image_chip(bestframe, get_face_chip_details(bestshape,150,0.25), face_chip);
             std::vector<matrix<rgb_pixel>> faces;
-            auto f = *(face_chip);
-            faces.push_back(f);
-            std::vector<matrix<float,0,1>> face_descriptors = net(faces);
+            faces.push_back(face_chip);
+            std::vector<matrix<float,0,1>> curr_descriptors = net(faces);
 
-            // find similar face 
+            // find similar face
+            for (size_t i = 0; i < descriptors.size(); ++i) {
+                //cout << length(descriptors[i]-curr_descriptors[0]) << " " << names[i] << "\n";
 
+                if (length(descriptors[i]-curr_descriptors[0]) < 0.6) {
+                    result.Res = names[i];
+                    return result;
+                }
+            }
 
+            //cin.get();
         }
     } catch (exception& e) {
         result.Err = strdup(e.what());
     }
     return result;
 }
+

@@ -1,6 +1,7 @@
 package eyes
 
 import (
+	"fmt"
 	"log"
 	"runtime"
 	"sync/atomic"
@@ -76,6 +77,8 @@ func trackTasks(framec chan Frame, taskc chan TrackTask, trackersMapc chan map[i
 
 func trackWorker(taskc chan TrackTask, rframec chan RFrame, trackSyncc chan TrackSync) {
 	for task := range taskc {
+		fmt.Printf("update sid=%d, rank=%d, cadre=%d, [%v]\n", task.Frame.SID, task.Frame.Rank, task.Frame.ID, task.Tracker)
+		span := task.Cadre.SpawnSpan("update_tracker_on_cadre")
 		rect, err := cv.UpdateTracker(task.Tracker, task.Cadre)
 		if err != nil {
 			// todo: log err
@@ -90,7 +93,7 @@ func trackWorker(taskc chan TrackTask, rframec chan RFrame, trackSyncc chan Trac
 
 		// even if error we have to send RFrame
 		rframec <- RFrame{task.Frame, rect}
-
+		span.Finish()
 	}
 }
 
@@ -99,41 +102,41 @@ func trackWorker(taskc chan TrackTask, rframec chan RFrame, trackSyncc chan Trac
 // otherwise need to replase it with heap type
 type Frames struct {
 	frames [][]Frame
-	locks  []*int32
+	locks  []int32
 }
 
-func (t Frames) Push(frame Frame) {
+func (t *Frames) Push(frame Frame) {
 	// check the length of queue, if it less than required rank - extend it
 	ln := frame.Rank - len(t.frames) + 1
 	if ln > 0 {
 		t.frames = append(t.frames, make([][]Frame, ln)...)
-		t.locks = append(t.locks, make([]*int32, ln)...)
+		t.locks = append(t.locks, make([]int32, ln)...)
 	}
 
 	t.frames[frame.Rank] = append(t.frames[frame.Rank], frame)
 }
 
-func (t Frames) Pop() (Frame, bool) {
+func (t *Frames) Pop() (Frame, bool) {
 	for i, frms := range t.frames {
 		if len(frms) == 0 {
 			continue
 		}
 
 		// check lock for current session tracker
-		if l := atomic.LoadInt32(t.locks[i]); l == 1 {
+		if l := atomic.LoadInt32(&t.locks[i]); l == 1 {
 			continue
 		}
 
 		// pop frame
 		frame, frms := frms[0], frms[1:]
 		t.frames[i] = frms
-		atomic.StoreInt32(t.locks[i], 1)
+		atomic.StoreInt32(&t.locks[i], 1)
 		return frame, true
 
 	}
 	return Frame{}, false
 }
 
-func (t Frames) Unlock(rank int) {
-	atomic.StoreInt32(t.locks[rank], 0)
+func (t *Frames) Unlock(rank int) {
+	atomic.StoreInt32(&t.locks[rank], 0)
 }

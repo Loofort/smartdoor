@@ -38,6 +38,7 @@ Result UpdateTracker(void* ptracker, void* pcadre);
 void DestroyTracker(void* res);
 
 Result Recognize (void* pcadre[], void* prect[], int len );
+ResultArr InitPersons(const char* folder, const char* modelpath);
 
 #ifdef __cplusplus
 }
