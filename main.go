@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
-	"net/url"
 	"runtime"
 	"time"
 
@@ -16,9 +14,6 @@ import (
 	opentracing "github.com/opentracing/opentracing-go"
 	jaeger "github.com/uber/jaeger-client-go"
 	jaegercfg "github.com/uber/jaeger-client-go/config"
-	"sourcegraph.com/sourcegraph/appdash"
-	appdashtracer "sourcegraph.com/sourcegraph/appdash/opentracing"
-	"sourcegraph.com/sourcegraph/appdash/traceapp"
 )
 
 //"../../../smartdoor.bk/data/VIDEO/me/me.avi"
@@ -40,8 +35,7 @@ func main() {
 
 	idleDispather := make(chan struct{})
 	idleTracker := make(chan struct{})
-	idleRecognizer := make(chan struct{})
-	idlec := eyes.Idler(idleDispather, idleTracker, idleRecognizer)
+	idlec := eyes.Idler(idleDispather, idleTracker)
 	detectSig := eyes.Timer(500*time.Millisecond, idlec)
 
 	cadrec := make(chan cv.Cadre, 24) // the buffer should be calculated based on fps, acceptable delay is about 1 sec.
@@ -156,41 +150,4 @@ var trc opentracing.Tracer
 
 func secondTracer() opentracing.Tracer {
 	return trc
-}
-func openTracerAppDash() {
-	memStore := appdash.NewMemoryStore()
-	store := &appdash.RecentStore{
-		MinEvictAge: 20 * time.Minute,
-		DeleteStore: memStore,
-	}
-
-	// Start the Appdash web UI on port 8700.
-	url, err := url.Parse("http://localhost:8700")
-	if err != nil {
-		log.Fatal(err)
-	}
-	tapp, err := traceapp.New(nil, url)
-	if err != nil {
-		log.Fatal(err)
-	}
-	tapp.Store = store
-	tapp.Queryer = memStore
-	log.Println("Appdash web UI running on HTTP :8700")
-	go func() {
-		log.Fatal(http.ListenAndServe(":8700", tapp))
-	}()
-
-	// We will use a local collector (as we are running the Appdash web UI
-	// embedded within our app).
-	//
-	// A collector is responsible for collecting the information about traces
-	// (i.e. spans and annotations) and placing them into a store. In this app
-	// we use a local collector (we could also use a remote collector, sending
-	// the information to a remote Appdash collection server).
-	collector := appdash.NewLocalCollector(store)
-
-	// Here we use the local collector to create a new opentracing.Tracer
-	tracer := appdashtracer.NewTracer(collector)
-	opentracing.InitGlobalTracer(tracer)
-
 }

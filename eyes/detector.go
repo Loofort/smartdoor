@@ -1,7 +1,6 @@
 package eyes
 
 import (
-	"fmt"
 	"log"
 	"sort"
 
@@ -20,7 +19,6 @@ func Detector(cadrec chan cv.Cadre, detectSig chan struct{}, cadreFuncc chan Cad
 
 		select {
 		case <-detectSig:
-			fmt.Printf("trigger %d \n", cadre.ID)
 			cadreFuncc <- detectedCadre(cadre)
 		default:
 			c := cadre

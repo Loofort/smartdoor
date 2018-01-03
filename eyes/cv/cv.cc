@@ -333,7 +333,7 @@ Result Recognize (void* pcadre[], void* prect[], int len ) {
 
             // find similar face
             for (size_t i = 0; i < descriptors.size(); ++i) {
-                //cout << length(descriptors[i]-curr_descriptors[0]) << " " << names[i] << "\n";
+                cout << length(descriptors[i]-curr_descriptors[0]) << " " << names[i] << "\n";
 
                 if (length(descriptors[i]-curr_descriptors[0]) < 0.6) {
                     result.Res = names[i];

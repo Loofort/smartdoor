@@ -1,6 +1,7 @@
 package eyes
 
 import (
+	"fmt"
 	"runtime"
 
 	"github.com/Loofort/smartdoor/eyes/cv"
@@ -90,6 +91,7 @@ func dispatcher(rectsMapc chan map[int]cv.Rect, cadreidc chan int, rframec chan 
 			}
 
 		case rframe := <-rframec:
+			fmt.Printf("dispatcher: got frame [sid=%d, rank=%d, cadre=%d]\n", rframe.SID, rframe.Rank, rframe.ID)
 			sid := rframe.SID
 			if _, ok := rframesMap[sid]; !ok {
 				break
@@ -120,6 +122,7 @@ func dispatcher(rectsMapc chan map[int]cv.Rect, cadreidc chan int, rframec chan 
 			}
 
 		case taskc1 <- task:
+			fmt.Printf("dispatcher: task sent len=%d [sid=%d, rank=%d, cadre=%d]  \n", len(task), task[0].SID, task[0].Rank, task[0].ID)
 			taskc1 = nil
 		case personc1 <- personTask:
 			personc1 = nil
@@ -148,6 +151,7 @@ func recognizeWorker(rframesc chan []RFrame, personSIDc chan PersonSID, rframePe
 func recognizeWork(rframes []RFrame, personSIDc chan PersonSID, rframePersonc chan RFramePerson) {
 	cadres := make([]cv.Cadre, len(rframes))
 	rects := make([]cv.Rect, len(rframes))
+	str := ""
 	for i, rframe := range rframes {
 		cadres[i] = rframe.Frame.Cadre
 		rects[i] = rframe.Rect
@@ -156,9 +160,11 @@ func recognizeWork(rframes []RFrame, personSIDc chan PersonSID, rframePersonc ch
 		//s2 := rects[i].SpawnSpan("recognize_by_rect")
 		defer s1.Finish()
 		//defer s2.Finish()
+		str += fmt.Sprintf(" %v.%v", rframe.ID, rframe.SID)
 	}
 
 	person, err := cv.RecognizeBest(cadres, rects)
+	fmt.Printf("recognize %s ; err: %v; person: %v\n", str, err, person)
 	// todo: change condition
 	if err != nil && person.Name != "" {
 		personSIDc <- PersonSID{person, rframes[0].SID}

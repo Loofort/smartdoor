@@ -1,7 +1,6 @@
 package eyes
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -28,9 +27,8 @@ func Idler(chans ...chan struct{}) chan struct{} {
 				}
 			}
 
-			select {
-			case idlec <- struct{}{}:
-			}
+			idlec <- struct{}{}
+
 		}
 	}()
 
@@ -50,11 +48,9 @@ func Timer(period time.Duration, idlec chan struct{}) chan struct{} {
 			}
 			select {
 			case <-timer.C:
-				fmt.Printf("time trigger\n")
 				reset(timer, period)
 				idle = true
 			case <-idlec:
-				fmt.Printf("idle trigger\n")
 				// todo: think about timeout for idle state
 				reset(timer, period)
 				idle = true

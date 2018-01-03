@@ -29,9 +29,9 @@ func Synchronizer(CadreFuncc chan CadreFunc, framec chan Frame, trackersMapc cha
 	var sessions []Session
 
 	for cf := range CadreFuncc {
-		//fmt.Printf("#")
+		fmt.Printf("#")
 		cadre, trackers := callCadreFunc(cf, cadreidc, len(sessions))
-		//fmt.Printf("%d ", cadre.ID)
+		fmt.Printf("%d \n", cadre.ID)
 
 		// transmit cadre to each session
 		for i, session := range sessions {
@@ -62,7 +62,7 @@ func Synchronizer(CadreFuncc chan CadreFunc, framec chan Frame, trackersMapc cha
 		rframesMapc <- rframesMap
 
 		// create rframe from each new tracker and push to dispatcher
-		// if new tracker is one of the old trucker , no big deal, we'll get two similar frames for recognition
+		// if new tracker is one of the old tracker , no big deal, we'll get two similar frames for recognition
 		for i, session := range sessions {
 			trackerRect, ok := findTrackerRect(session.Tracker, trackers)
 			if !ok {
@@ -154,7 +154,7 @@ func synchronize(sessions []Session, rects []cv.Rect, trackers []TrackerRect) []
 		}
 
 		// - or give one more chance (up to 3 times) for session that wasn't match
-		fmt.Printf("(%t && %d) ", !rects[i].Nil(), session.Try)
+		fmt.Printf("(%#v && %d) ", rects[i], session.Try)
 		if !rects[i].Nil() && session.Try < 3 {
 			session.Try++
 			newSessions = append(newSessions, session)
