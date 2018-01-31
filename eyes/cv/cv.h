@@ -32,13 +32,20 @@ void DestroyCadre(void* res);
 
 ResultArr Detect(void* pcadre);
 void DestroyRect(void* res);
+ResultArr HAARDetect(void* pcadre);
+void InitDetectors(const char* modelpath, const char* haarpath);
+ResultArr NetDetect(void* pcadre);
+
 
 Result NewTracker(void* pcadre, void* prect);
 Result UpdateTracker(void* ptracker, void* pcadre);
 void DestroyTracker(void* res);
 
 Result Recognize (void* pcadre[], void* prect[], int len );
-ResultArr InitPersons(const char* folder, const char* modelpath);
+ResultArr InitPersons(const char* folder, const char* modelpath, const char* netpath);
+
+void SaveRFrame(void* pcadre, void* prect, const char *path);
+void ShowRFrame(void* pcadre, void* prect);
 
 #ifdef __cplusplus
 }

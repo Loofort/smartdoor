@@ -27,6 +27,7 @@ func main() {
 	persons, err := cv.InitPersons(
 		"../../../smartdoor.bk/data/ideal/boss/train/",
 		"eyes/cv/cnn-models/shape_predictor_5_face_landmarks.dat",
+		"eyes/cv/cnn-models/dlib_face_recognition_resnet_model_v1.dat",
 	)
 	if err != nil {
 		log.Fatal(err)

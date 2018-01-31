@@ -217,7 +217,8 @@ func min(x, y int) int {
 
 func Detect(cadre Cadre) ([]Rect, error) {
 
-	ptr, cnt, err := toGoArr(C.Detect(cadre.cadre.p))
+	ptr, cnt, err := toGoArr(C.HAARDetect(cadre.cadre.p))
+	//ptr, cnt, err := toGoArr(C.Detect(cadre.cadre.p))
 	if err != nil {
 		err = fmt.Errorf("can't detect faces: %v", err)
 		return nil, err
@@ -252,6 +253,16 @@ func Detect(cadre Cadre) ([]Rect, error) {
 
 func destroyRect(p unsafe.Pointer) {
 	C.DestroyRect(p)
+}
+
+func InitDetectors(modelPath, haarPath string) {
+	cmodelPath := C.CString(modelPath)
+	defer C.free(unsafe.Pointer(cmodelPath))
+
+	chaarPath := C.CString(haarPath)
+	defer C.free(unsafe.Pointer(chaarPath))
+
+	C.InitDetectors(cmodelPath, chaarPath)
 }
 
 /***************** Tracker ************************/
@@ -337,14 +348,17 @@ func RecognizeBest(cadres []Cadre, rects []Rect) (Person, error) {
 	return Person{str}, err
 }
 
-func InitPersons(folder, modelPath string) ([]string, error) {
+func InitPersons(folder, modelPath, netPath string) ([]string, error) {
 	cfolder := C.CString(folder)
 	defer C.free(unsafe.Pointer(cfolder))
 
 	cmodelPath := C.CString(modelPath)
 	defer C.free(unsafe.Pointer(cmodelPath))
 
-	ptr, cnt, err := toGoArr(C.InitPersons(cfolder, cmodelPath))
+	cnetPath := C.CString(netPath)
+	defer C.free(unsafe.Pointer(cnetPath))
+
+	ptr, cnt, err := toGoArr(C.InitPersons(cfolder, cmodelPath, cnetPath))
 	if err != nil {
 		err = fmt.Errorf("can't init persons: %v", err)
 		return nil, err
@@ -362,4 +376,17 @@ func InitPersons(folder, modelPath string) ([]string, error) {
 	}
 
 	return files, nil
+}
+
+/*************************** helpers for debug ***********************/
+
+func Save(cadre Cadre, rect Rect, path string) {
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+
+	C.SaveRFrame(cadre.cadre.p, rect.rect.p, cpath)
+}
+
+func Show(cadre Cadre, rect Rect) {
+	C.ShowRFrame(cadre.cadre.p, rect.rect.p)
 }
